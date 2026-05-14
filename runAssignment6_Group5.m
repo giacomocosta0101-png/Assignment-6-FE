@@ -1,9 +1,9 @@
-% runAssignment5
+% runAssignment6
 % group 5, AY2025-2026
 %
-% Calibration of spot volatilities on LMM, delta, vega sensitivities of a
-% structured bond, delta and vega hedging by using swaps and caps, pricing
-% an exoticc cup on a BMM
+% Pricing of a 2y/3y EURO STOXX certificate swap under a calibrated NIG model,
+% with Black smile-adjusted and flat benchmarks; pricing of a 10y Bermudan
+% Payer Swaption (non-call 2) under a 1-factor Hull-White trinomial tree.
 
 addpath('bootstrap',genpath('ex_1'),genpath('ex_2'));
 formatData='dd/mm/yyyy';
