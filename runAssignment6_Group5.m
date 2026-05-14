@@ -24,35 +24,32 @@ strikes = data.strikes(:);
 
 N_sim = 1e7;
 alpha = 0.5;
-first_coupon = 0.06;
+first_coupon  = 0.06;
 second_coupon = 0.02;
 
-% Point a)
-upfront_nig = compute_upfront(parameters,sigma,k,eta,...
-    N_sim,alpha,first_coupon,second_coupon,spread,notional, 'NIG');
+% Point a) -- 2Y NIG
+upfront_nig         = compute_upfront(parameters, sigma, k, eta, ...
+    N_sim, alpha, first_coupon, second_coupon, spread, notional, 'NIG');
 
-% Point b)
-upfront_black_smile = compute_upfront(parameters,sigma,k,eta,...
-    N_sim,alpha,first_coupon,second_coupon,spread,notional,'BlackSmile');
+% Point b) -- 2Y Black with smile
+upfront_black_smile = compute_upfront(parameters, sigma, k, eta, ...
+    N_sim, alpha, first_coupon, second_coupon, spread, notional, 'BlackSmile');
 
-% Point d)
-upfront_3y_nig = compute_upfront_3y(parameters, sigma, k, eta, ...
+% Point d) -- 3Y NIG
+upfront_3y_nig      = compute_upfront_3y(parameters, sigma, k, eta, ...
     N_sim, alpha, first_coupon, second_coupon, spread, notional);
 
-% Point e)
+% Point e) -- naive flat Black (no smile) at 2Y and 3Y
 upfront_black_flat_2y = compute_upfront(parameters, sigma, k, eta, ...
     N_sim, alpha, first_coupon, second_coupon, spread, notional, 'BlackFlat');
 
-fprintf('\n--- Case Study 1: 2Y Certificate Swap ---\n');
-fprintf('Upfront 2Y_NIG         = %.8f\n', upfront_nig);
-fprintf('Upfront Black Smile = %.8f\n', upfront_black_smile);
-fprintf('Upfront 3Y_NIG         = %.8f\n', upfront_3y_nig);
-fprintf('Upfront Black Flat  = %.8f\n', upfront_black_flat_2y);
+upfront_black_flat_3y = compute_upfront_3y(parameters, [], [], [], ...
+    N_sim, [], first_coupon, second_coupon, spread, notional, ...
+    'Black', parameters.sigma_black);
 
-fprintf('Black Flat  - NIG = %.8f  (%.4f bps)\n', ...
-    upfront_black_flat_2y - upfront_nig, ...
-    (upfront_black_flat_2y - upfront_nig) * 1e4);
-
+print_case_study_1(notional, N_sim, ...
+    upfront_nig, upfront_black_smile, upfront_3y_nig, ...
+    upfront_black_flat_2y, upfront_black_flat_3y);
 %% Case Study 2: Bermudan Swaption Pricing via Hull-White Model
 
 settlement_date = datetime(2008, 2, 15);

@@ -1,17 +1,21 @@
 function upfront = compute_upfront_3y(parameters, sigma, kappa, eta, ...
-    N_sim, alpha, coupon_high, coupon_low, spread, notional)
+    N_sim, alpha, coupon_high, coupon_low, spread, notional, ...
+    method, sigma_black)
+
 % Mid-market upfront for the 3y version of the certificate (points c/d).
 %
-% Payoff: same digital coupon (6%) at year 1 and year 2; early redemption
-% fires the first time S falls below K. If neither year triggers, a final
-% 2% coupon is paid at year 3.
-%
-% Point d uses deterministic rates from the curve plus a constant dividend
-% yield, with the NIG parameters from point a. The spot under Q reads
-%     S_t = S_0 * exp( integrated_drift(t) + f_t )
-% so we chain two independent Levy increments to get the spot at the year 1
-% and year 2 reset dates.
+% Default (method omitted) uses NIG Monte Carlo and requires (sigma, kappa,
+% eta, alpha). Passing method = 'Black' switches to a log-normal Black MC
+% and uses sigma_black instead -- the NIG parameters are then ignored.
 
+    if nargin < 11 || isempty(method)
+        method = 'NIG';
+    end
+    useBlack = strcmpi(method, 'Black');
+    if useBlack && (nargin < 12 || isempty(sigma_black))
+        error('compute_upfront_3y:missingSigmaBlack', ...
+              'method = ''Black'' requires sigma_black as 12th argument.');
+    end
     rng(42);
 
     DC_ACT365 = 3;
@@ -24,8 +28,7 @@ function upfront = compute_upfront_3y(parameters, sigma, kappa, eta, ...
     B_curve   = parameters.discounts_bootstrap;
     startDate = parameters.startDate;
 
-    % Payment and reset dates. Year 1 and 2 are reused from `parameters`;
-    % only the year 3 dates are new in this case.
+    % Payment and reset dates.
     t1_pay   = parameters.firstCouponDate;
     t2_pay   = parameters.maturityDate;
     t3_pay   = business_date_offset(startDate, 'year_offset', 3, ...
@@ -34,7 +37,7 @@ function upfront = compute_upfront_3y(parameters, sigma, kappa, eta, ...
     t2_reset = business_date_offset(t2_pay, 'day_offset', -2, ...
                    'convention', 'modified_following');
 
-    % Discount factors at every relevant date.
+    % Discount factors.
     B_t1_reset = get_discount_factor_by_zero_rates_linear_interp(startDate, ...
                      t1_reset, d_curve, B_curve);
     B_t2_reset = get_discount_factor_by_zero_rates_linear_interp(startDate, ...
@@ -44,37 +47,44 @@ function upfront = compute_upfront_3y(parameters, sigma, kappa, eta, ...
     B_t3_pay = get_discount_factor_by_zero_rates_linear_interp(startDate, ...
                    t3_pay, d_curve, B_curve);
 
-    % Times that drive the dynamics: Act/365, same convention as the curve.
+    % Act/365 times driving the dynamics.
     ttm_1 = parameters.ttm_reset;
     ttm_2 = yearfrac(startDate, t2_reset, DC_ACT365);
     dt_1  = ttm_1;
     dt_2  = ttm_2 - ttm_1;
 
-    % Coupon accruals between consecutive payment dates (30/360 from termsheet).
+    % 30/360 coupon accruals.
     accr_1 = parameters.accrual_1;
     accr_2 = parameters.accrual_2;
     accr_3 = yearfrac(t2_pay, t3_pay, DC_30_360);
 
-    % Deterministic part of the spot growth between observations.
-    % Rates push S up via 1/B, dividends pull S down via exp(-d * dt).
+    % Deterministic spot growth between observations.
     grow_1 = exp(-div * dt_1) / B_t1_reset;
     grow_2 = exp(-div * dt_2) * B_t1_reset / B_t2_reset;
 
-    % Two independent NIG increments. Independence is what keeps the
-    % multi-period structure consistent with a Levy process; without it
-    % we would lose the joint distribution of (S_t1, S_t2).
-    Df_1 = nig_increment(sigma, kappa, eta, alpha, dt_1, N_sim);
-    Df_2 = nig_increment(sigma, kappa, eta, alpha, dt_2, N_sim);
+    % Two independent log-return increments. Both models are martingale-
+    % corrected so that E[exp(Df_i)] = 1 and the deterministic factor
+    % grow_i carries the full drift.
+    if useBlack
+        Df_1 = black_increment(sigma_black, dt_1, N_sim);
+        Df_2 = black_increment(sigma_black, dt_2, N_sim);
+    else
+        Df_1 = nig_increment(sigma, kappa, eta, alpha, dt_1, N_sim);
+        Df_2 = nig_increment(sigma, kappa, eta, alpha, dt_2, N_sim);
+    end
 
     % Chain the spot through the two observation points.
     S_1 = S_0 .* grow_1 .* exp(Df_1);
     S_2 = S_1 .* grow_2 .* exp(Df_2);
 
-    % A path can trigger at most once. Survivors are paths that stayed at
-    % or above strike on both observations.
     trig_1  = (S_1 < K);
     trig_2  = (~trig_1) & (S_2 < K);
     survive = ~trig_1 & ~trig_2;
+
+    fprintf('--- 3Y certificate (%s) ---\n', method);
+    fprintf('Q(trigger at T1)              = %.4f\n', mean(trig_1));
+    fprintf('Q(trigger at T2 | no T1)      = %.4f\n', sum(trig_2) / sum(~trig_1));
+    fprintf('Q(survival to T3)             = %.4f\n', mean(survive));
 
     % PV of the structured coupon leg paid by IB.
     pv_coupon_sim = notional * ( ...
@@ -83,9 +93,7 @@ function upfront = compute_upfront_3y(parameters, sigma, kappa, eta, ...
             B_t3_pay * survive * accr_3 * coupon_low );
     pv_coupon = mean(pv_coupon_sim);
 
-    % PV of the floating leg paid by Bank XX. The leg cancels at the trigger
-    % year, so the floater identity 1 - B(0, T_end) uses a different T_end
-    % per scenario, and so does the BPV that prices the spread.
+    % PV of the floating leg paid by Bank XX, stops at trigger.
     sd_dt        = datetime(startDate, 'ConvertFrom', 'datenum');
     t3_pay_unadj = datenum(sd_dt + calyears(3));
 
@@ -107,9 +115,8 @@ end
 
 
 function Df = nig_increment(sigma, kappa, eta, alpha, dt, N)
-% One NMVM log-return increment over a period of length dt. NIG corresponds
-% to alpha = 1/2. Same algebra used for point a, just parametrised on dt
-% so we can call it twice for the chained scheme.
+% NMVM (NIG when alpha = 1/2) log-return increment over dt, with
+% martingale correction so that E[exp(Df)] = 1.
 
     G = random('InverseGaussian', 1, dt / kappa, [N, 1]);
     g = randn(N, 1);
@@ -120,4 +127,13 @@ function Df = nig_increment(sigma, kappa, eta, alpha, dt, N)
     Df = sqrt(dt) * sigma .* sqrt(G) .* g ...
        - (0.5 + eta) * dt * sigma^2 .* G ...
        - ln_L_eta;
+end
+
+
+function Df = black_increment(sigma, dt, N)
+% Black (log-normal) log-return increment over dt, martingale-corrected:
+%     Df = -sigma^2/2 * dt + sigma * sqrt(dt) * z,   z ~ N(0,1).
+
+    z  = randn(N, 1);
+    Df = -0.5 * sigma^2 * dt + sigma * sqrt(dt) .* z;
 end
